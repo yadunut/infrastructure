@@ -1,0 +1,244 @@
+#+title: Readme
+
+* Documentation
+There will be 2 datacenters. One is premhome, and the other one is the SGP1 (The digitalocean region name).
+
+In SGP1, there will be 1 server, which will be the offsite server. This server will have the name Infranut-SGP1.
+This will be the first server we bootstrap, with
+
+
+* Offsite Server
+** DONE Setup
+#+begin_src env :tangle .env
+TF_VAR_do_token="op://Infrastructure/Digitalocean token/password"
+TF_VAR_ssh_public_key="op://Infrastructure/yadunut/public key"
+#+end_src
+
+I'm using justfile just to make running commands easier
+
+#+begin_src just :tangle justfile
+set positional-arguments
+
+default:
+  @just --list
+
+terraform *ARGS:
+  op run --env-file=".env" -- terraform {{ARGS}}
+#+end_src
+
+** STRT Create Offsite Server
+
+#+begin_src terraform :tangle main.tf :mkdirp yes :comments link
+terraform { }
+
+module "offsite" {
+  source = "./offsite"
+  do_token = var.do_token
+  ssh_public_key = var.ssh_public_key
+}
+#+end_src
+
+Setup variables needed
+#+begin_src terraform :tangle variables.tf :mkdirp yes :comments link
+variable do_token {
+  type=string
+  sensitive=true
+}
+variable ssh_public_key { type=string }
+#+end_src
+
+#+begin_src terraform :tangle offsite/variables.tf :mkdirp yes :comments link
+variable do_token {
+  type=string
+  sensitive=true
+}
+variable ssh_public_key { type=string }
+variable username {
+  type=string
+  default = "yadunut"
+}
+#+end_src
+
+Setup terraform providers
+#+begin_src terraform :tangle offsite/main.tf :comments link
+terraform {
+  required_providers {
+    digitalocean = {
+      source = "digitalocean/digitalocean"
+      version = "2.32.0"
+    }
+    ansible = {
+      source = "ansible/ansible"
+      version = "1.1.0"
+    }
+  }
+}
+
+provider "digitalocean" {
+  token = var.do_token
+}
+#+end_src
+
+Import SSH Key
+#+begin_src terraform :tangle offsite/main.tf :comments link
+resource "digitalocean_ssh_key" "yadunut" {
+  name = "yadunut"
+  public_key = var.ssh_public_key
+}
+#+end_src
+
+If you have keys already in digitalocean, then,
+#+begin_src bash
+terraform import digitalocean_ssh_key.yadunut <id>
+#+end_src
+
+Spin up a VM. On the ansible side, I'm giving it the username, that will eventually be used, but for the initial setup, I'm expecting to login via root to configure and setup the VMs
+#+begin_src terraform :tangle offsite/main.tf :comments link
+resource "digitalocean_droplet" "infranut_SGP1" {
+  image  = "ubuntu-22-04-x64"
+  name   = "infranut-SGP1"
+  region = "SGP1"
+  size   = "s-1vcpu-1gb"
+  ssh_keys = [digitalocean_ssh_key.yadunut.id]
+}
+
+output "infranut_SGP1_public_ipv4" {
+  value = digitalocean_droplet.infranut_SGP1.ipv4_address
+}
+
+# resource "ansible_host" "infranut_SGP1" {
+#   name = digitalocean_droplet.infranut_SGP1.name
+#   groups = ["SGP1", "server"]
+#   variables = {
+#     ansible_user = var.username
+#     ansible_host = digitalocean_droplet.infranut_SGP1.ipv4_address
+#   }
+# }
+#+end_src
+
+Ansible host is not added above, as I want all networking to go through the tailscale IP address
+
+#+begin_src yaml :tangle offsite/requirements.yml :comments link
+---
+collections:
+  - name: cloud.terraform
+#+end_src
+
+#+begin_src yaml :tangle offsite/inventory.yml :comments link
+---
+plugin: cloud.terraform.terraform_provider
+#+end_src
+
+#+Begin_src terraform :tangle offsite/main.tf :comments link
+resource "ansible_playbook" "setup_offsite" {
+  playbook = "setup-offsite.yml"
+  replayable = false
+  name = digitalocean_droplet.infranut_SGP1.ipv4_address
+  extra_vars = {
+    created_username = var.username
+    ssh_key = var.ssh_public_key
+  }
+}
+#+end_src
+
+#+begin_src yaml :tangle offsite/setup-offsite.yml :comments link
+---
+- hosts: all
+  remote_user: var.username
+  become: true
+  roles:
+    - role: ../ansible/roles/do_setup
+      remote_user: root
+    - role: ../ansible/roles/common
+    # - role: headscale
+    # - role: tailscale
+    # - role: consul
+#+end_src
+
+#+begin_src yaml :tangle ansible/roles/do_setup/tasks/main.yml :mkdirp yes :comments link
+---
+- name: Setup passwordless sudo
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    regexp: '^%sudo'
+    line: '%sudo ALL=(ALL) NOPASSWD: ALL'
+    validate: '/usr/sbin/visudo -cf %s'
+- name: Create user with sudo privilege
+  user:
+    name: "{{ created_username }}"
+    state: present
+    groups: sudo
+    shell: /bin/bash
+    append: true
+
+- name: Set authorized key for remote user
+  authorized_key:
+    user: "{{ created_username }}"
+    state: present
+    key: "{{ ssh_key }}"
+
+- name: Setup passwordless sudo
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    state: present
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+    validate: 'sshd -t -f %s'
+
+- name: Update apt and install packages
+  apt:
+    pkg:
+      - curl
+      - vim
+      - git
+    state: latest
+#+end_src
+
+#+begin_src yaml :tangle ansible/roles/common/tasks/main.yml :mkdirp yes :comments link
+---
+- name: Setup hashicorp repositories
+  block:
+    - apt_key:
+        url: https://apt.releases.hashicorp.com/gpg
+        state: present
+    - apt_repository:
+        repo: deb https://apt.releases.hashicorp.com jammy main
+        state: present
+
+- name: Setup tailscale repositories
+  block:
+    - apt_key:
+        url: https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg
+        state: present
+    - apt_repository:
+        repo: deb https://pkgs.tailscale.com/stable/ubuntu jammy main
+        state: present
+
+
+- name: Update System
+  apt:
+    update_cache: true
+    upgrade: dist
+
+- name: Install ufw
+  apt:
+    pkg:
+      - ufw
+    state: latest
+
+- name: Enable and setup ufw
+  block:
+    - ufw:
+        rule: limit
+        port: ssh
+        proto: tcp
+    - ufw:
+        logging: on
+        state: enabled
+        default: deny
+#+end_src
+** TODO Setup headscale on Server
+
+** TODO Setup Tailscale on Server
+*** TODO Save Tailscale IP locally / in output
