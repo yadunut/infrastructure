@@ -71,12 +71,19 @@ terraform {
       source = "ansible/ansible"
       version = "1.1.0"
     }
+    # cloudflare = {
+    #   source = "cloudflare/cloudflare"
+    #   version = "4.19.0"
+    # }
   }
 }
 
 provider "digitalocean" {
   token = var.do_token
 }
+
+# provider "cloudflare" {
+# }
 #+end_src
 
 Import SSH Key
@@ -84,6 +91,9 @@ Import SSH Key
 resource "digitalocean_ssh_key" "yadunut" {
   name = "yadunut"
   public_key = var.ssh_public_key
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 #+end_src
 
@@ -118,38 +128,44 @@ output "infranut_SGP1_public_ipv4" {
 
 Ansible host is not added above, as I want all networking to go through the tailscale IP address
 
-#+begin_src yaml :tangle offsite/requirements.yml :comments link
+#+begin_src yaml :tangle ansible/requirements.yml :comments link
 ---
 collections:
   - name: cloud.terraform
 #+end_src
 
-#+begin_src yaml :tangle offsite/inventory.yml :comments link
+#+begin_src yaml :tangle ansible/inventory.yml :comments link
 ---
 plugin: cloud.terraform.terraform_provider
+project_path: ../
 #+end_src
 
 #+Begin_src terraform :tangle offsite/main.tf :comments link
 resource "ansible_playbook" "setup_offsite" {
-  playbook = "setup-offsite.yml"
-  replayable = false
+  playbook = "ansible/setup-offsite.yml" # Add path ansible/setup-offsite.yml
+  # replayable = false
   name = digitalocean_droplet.infranut_SGP1.ipv4_address
+  verbosity = 6
   extra_vars = {
-    created_username = var.username
-    ssh_key = var.ssh_public_key
+    username = var.username
+    # ssh_key = var.ssh_public_key
   }
 }
 #+end_src
 
-#+begin_src yaml :tangle offsite/setup-offsite.yml :comments link
+#+begin_src yaml :tangle ansible/setup-offsite.yml :comments link
 ---
 - hosts: all
-  remote_user: var.username
+  # remote_user: "{{ username }}"
+  remote_user: "{{ username }}"
   become: true
-  roles:
-    - role: ../ansible/roles/do_setup
-      remote_user: root
-    - role: ../ansible/roles/common
+  tasks:
+    - name: testing ping
+      ping:
+  # roles:
+  #   - role: ../ansible/roles/do_setup
+  #     remote_user: root
+  #   - role: ../ansible/roles/common
     # - role: headscale
     # - role: tailscale
     # - role: consul
@@ -238,7 +254,10 @@ resource "ansible_playbook" "setup_offsite" {
         state: enabled
         default: deny
 #+end_src
+** TODO Setup Cloudflare domains on Server [0/1]
+*** TODO Setup terraform for cloudflare
 ** TODO Setup headscale on Server
+** TODO Headscale on Terraform
 
 ** TODO Setup Tailscale on Server
 *** TODO Save Tailscale IP locally / in output
