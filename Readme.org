@@ -23,7 +23,7 @@ default:
   @just --list
 
 terraform *ARGS:
-  op run --env-file=".env" -- terraform {{ARGS}}
+  op run --env-file=".env" --no-masking -- terraform {{ARGS}}
 #+end_src
 
 ** STRT Create Offsite Server
@@ -145,10 +145,9 @@ resource "ansible_playbook" "setup_offsite" {
   playbook = "ansible/setup-offsite.yml" # Add path ansible/setup-offsite.yml
   # replayable = false
   name = digitalocean_droplet.infranut_SGP1.ipv4_address
-  verbosity = 6
   extra_vars = {
-    username = var.username
-    # ssh_key = var.ssh_public_key
+    created_username = var.username
+    ssh_key = "'${var.ssh_public_key}'"
   }
 }
 #+end_src
@@ -157,15 +156,11 @@ resource "ansible_playbook" "setup_offsite" {
 ---
 - hosts: all
   # remote_user: "{{ username }}"
-  remote_user: "{{ username }}"
+  remote_user: "root"
   become: true
-  tasks:
-    - name: testing ping
-      ping:
-  # roles:
-  #   - role: ../ansible/roles/do_setup
-  #     remote_user: root
-  #   - role: ../ansible/roles/common
+  roles:
+    - role: roles/do_setup
+    - role: roles/common
     # - role: headscale
     # - role: tailscale
     # - role: consul
@@ -173,6 +168,9 @@ resource "ansible_playbook" "setup_offsite" {
 
 #+begin_src yaml :tangle ansible/roles/do_setup/tasks/main.yml :mkdirp yes :comments link
 ---
+- name: print ssh_key
+  debug:
+    var: ssh_key
 - name: Setup passwordless sudo
   lineinfile:
     path: /etc/sudoers
@@ -189,8 +187,10 @@ resource "ansible_playbook" "setup_offsite" {
     append: true
 
 - name: Set authorized key for remote user
+  become: true
   authorized_key:
     user: "{{ created_username }}"
+    manage_dir: true
     state: present
     key: "{{ ssh_key }}"
 
