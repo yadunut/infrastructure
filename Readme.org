@@ -1,4 +1,8 @@
-#+title: Readme
+#+title: My Infrastructure
+* Setting up the infrastructure
+1. To generate the infrastructure, run ~org-babel-tangle~ on the readme.
+2. Remove the ~op run~ parts from the justfile unless you are using 1password also.
+3. Replace the contents in the ~.env~ with your tokens / links to 1password resources
 
 * Documentation
 There will be 2 datacenters. One is premhome, and the other one is the SGP1 (The digitalocean region name).
@@ -145,6 +149,7 @@ resource "ansible_playbook" "setup_offsite" {
   playbook = "ansible/setup-offsite.yml" # Add path ansible/setup-offsite.yml
   # replayable = false
   name = digitalocean_droplet.infranut_SGP1.ipv4_address
+  replayable = false
   extra_vars = {
     created_username = var.username
     ssh_key = "'${var.ssh_public_key}'"
@@ -155,7 +160,6 @@ resource "ansible_playbook" "setup_offsite" {
 #+begin_src yaml :tangle ansible/setup-offsite.yml :comments link
 ---
 - hosts: all
-  # remote_user: "{{ username }}"
   remote_user: "root"
   become: true
   roles:
@@ -231,16 +235,16 @@ resource "ansible_playbook" "setup_offsite" {
         repo: deb https://pkgs.tailscale.com/stable/ubuntu jammy main
         state: present
 
-
 - name: Update System
   apt:
     update_cache: true
     upgrade: dist
 
-- name: Install ufw
+- name: Install ufw and tailscale
   apt:
     pkg:
       - ufw
+      - tailscale
     state: latest
 
 - name: Enable and setup ufw
