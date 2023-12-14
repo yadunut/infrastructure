@@ -10,12 +10,34 @@ There will be 2 datacenters. One is premhome, and the other one is the SGP1 (The
 In SGP1, there will be 1 server, which will be the offsite server. This server will have the name Infranut-SGP1.
 This will be the first server we bootstrap, with
 
+* Setup
+Use the ansible provider from github instead of the one on the registry since this is more updated
+#+begin_src bash
+gh repo clone ansible/terraform-provider-ansible ~/dev/src/github.com/ansible/terraform-provider-ansible
+cd ~/dev/src/github.com/ansible/terraform-provider-ansible
+make
+#+end_src
+
+Use the overridden ansible
+#+begin_src config :tangle /Users/yadunut/.terraformrc
+provider_installation {
+  dev_overrides {
+    "ansible/ansible" = "/Users/yadunut/dev/src/github.com/ansible/terraform-provider-ansible"
+  }
+
+  direct {}
+}
+#+end_src
 
 * Offsite Server
-** DONE Setup
+** DONE Setup Environment variables and helpers
 #+begin_src env :tangle .env
 TF_VAR_do_token="op://Infrastructure/Digitalocean token/password"
+TF_VAR_cf_token="op://Infrastructure/Cloudflare Token/credential"
+TF_VAR_cf_zone="op://Infrastructure/Cloudflare Token/zone"
+TF_VAR_cf_account="op://Infrastructure/Cloudflare Token/account"
 TF_VAR_ssh_public_key="op://Infrastructure/yadunut/public key"
+TF_VAR_headscale_tls_email="op://Infrastructure/Headscale/tls_email"
 #+end_src
 
 I'm using justfile just to make running commands easier
@@ -30,8 +52,7 @@ terraform *ARGS:
   op run --env-file=".env" --no-masking -- terraform {{ARGS}}
 #+end_src
 
-** STRT Create Offsite Server
-
+** Setup Terraform
 #+begin_src terraform :tangle main.tf :mkdirp yes :comments link
 terraform { }
 
@@ -39,6 +60,10 @@ module "offsite" {
   source = "./offsite"
   do_token = var.do_token
   ssh_public_key = var.ssh_public_key
+  cf_token = var.cf_token
+  cf_zone = var.cf_zone
+  cf_account = var.cf_account
+  headscale_tls_email = var.headscale_tls_email
 }
 #+end_src
 
@@ -48,7 +73,14 @@ variable do_token {
   type=string
   sensitive=true
 }
+variable cf_token {
+  type=string
+  sensitive=true
+}
+variable cf_zone { type=string }
+variable cf_account { type=string }
 variable ssh_public_key { type=string }
+variable headscale_tls_email { type=string }
 #+end_src
 
 #+begin_src terraform :tangle offsite/variables.tf :mkdirp yes :comments link
@@ -56,7 +88,14 @@ variable do_token {
   type=string
   sensitive=true
 }
+variable cf_token {
+  type=string
+  sensitive=true
+}
+variable cf_zone { type=string }
+variable cf_account { type=string }
 variable ssh_public_key { type=string }
+variable headscale_tls_email { type=string }
 variable username {
   type=string
   default = "yadunut"
@@ -75,10 +114,10 @@ terraform {
       source = "ansible/ansible"
       version = "1.1.0"
     }
-    # cloudflare = {
-    #   source = "cloudflare/cloudflare"
-    #   version = "4.19.0"
-    # }
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+      version = "4.20.0"
+    }
   }
 }
 
@@ -86,8 +125,9 @@ provider "digitalocean" {
   token = var.do_token
 }
 
-# provider "cloudflare" {
-# }
+provider "cloudflare" {
+  api_token = var.cf_token
+}
 #+end_src
 
 Import SSH Key
@@ -106,6 +146,8 @@ If you have keys already in digitalocean, then,
 terraform import digitalocean_ssh_key.yadunut <id>
 #+end_src
 
+** Spin up digital ocean server
+
 Spin up a VM. On the ansible side, I'm giving it the username, that will eventually be used, but for the initial setup, I'm expecting to login via root to configure and setup the VMs
 #+begin_src terraform :tangle offsite/main.tf :comments link
 resource "digitalocean_droplet" "infranut_SGP1" {
@@ -119,19 +161,22 @@ resource "digitalocean_droplet" "infranut_SGP1" {
 output "infranut_SGP1_public_ipv4" {
   value = digitalocean_droplet.infranut_SGP1.ipv4_address
 }
-
-# resource "ansible_host" "infranut_SGP1" {
-#   name = digitalocean_droplet.infranut_SGP1.name
-#   groups = ["SGP1", "server"]
-#   variables = {
-#     ansible_user = var.username
-#     ansible_host = digitalocean_droplet.infranut_SGP1.ipv4_address
-#   }
-# }
 #+end_src
 
-Ansible host is not added above, as I want all networking to go through the tailscale IP address
 
+** Assign domains to the server
+Setup cloudflare on terraform and point an assigned domain to my servers
+#+begin_src terraform :tangle offsite/main.tf :comments link
+resource "cloudflare_record" "ts" {
+  zone_id = var.cf_zone
+  name = "ts"
+  type = "A"
+  value = digitalocean_droplet.infranut_SGP1.ipv4_address
+  proxied = false
+}
+#+end_src
+** Setup server with ansible
+Add ansible dependencies
 #+begin_src yaml :tangle ansible/requirements.yml :comments link
 ---
 collections:
@@ -144,37 +189,48 @@ plugin: cloud.terraform.terraform_provider
 project_path: ../
 #+end_src
 
-#+Begin_src terraform :tangle offsite/main.tf :comments link
+Run the ansible playbook in terraform. I have no idea why this fails, and at this point, I'm giving up figuring out why.
+Updating ansible-provider to the latest one from github resolves this issue
+#+begin_src terraform :tangle offsite/main.tf :comments link
 resource "ansible_playbook" "setup_offsite" {
-  playbook = "ansible/setup-offsite.yml" # Add path ansible/setup-offsite.yml
+  playbook = "ansible/setup-offsite.yml"
   # replayable = false
   name = digitalocean_droplet.infranut_SGP1.ipv4_address
   replayable = false
+  verbosity = 5
   extra_vars = {
     created_username = var.username
     ssh_key = "'${var.ssh_public_key}'"
+    headscale_hostname = cloudflare_record.ts.hostname
+    tls_email = var.headscale_tls_email
   }
 }
 #+end_src
 
+Roles to run when setting up the ansible server.
+
+The first play would run on first setup, and would not run on second tries. Since the server cannot be accessed via root user anymore, this play will not be able to connect to the given server
 #+begin_src yaml :tangle ansible/setup-offsite.yml :comments link
 ---
 - hosts: all
   remote_user: "root"
-  become: true
   roles:
     - role: roles/do_setup
+  ignore_unreachable: true
+
+- hosts: all
+  remote_user: "{{ created_username }}"
+  become: true
+  roles:
     - role: roles/common
-    # - role: headscale
+    - role: roles/headscale
     # - role: tailscale
     # - role: consul
 #+end_src
 
+Useful initial setup for digital ocean ubuntu servers
 #+begin_src yaml :tangle ansible/roles/do_setup/tasks/main.yml :mkdirp yes :comments link
 ---
-- name: print ssh_key
-  debug:
-    var: ssh_key
 - name: Setup passwordless sudo
   lineinfile:
     path: /etc/sudoers
@@ -207,6 +263,8 @@ resource "ansible_playbook" "setup_offsite" {
     validate: 'sshd -t -f %s'
 
 - name: Update apt and install packages
+  retries: 3
+  delay: 3
   apt:
     pkg:
       - curl
@@ -215,6 +273,7 @@ resource "ansible_playbook" "setup_offsite" {
     state: latest
 #+end_src
 
+Setup for almost any server. The common tasks of installing required dependencies and repositories. Also setting up a basic firewall with ufw
 #+begin_src yaml :tangle ansible/roles/common/tasks/main.yml :mkdirp yes :comments link
 ---
 - name: Setup hashicorp repositories
@@ -250,17 +309,205 @@ resource "ansible_playbook" "setup_offsite" {
 - name: Enable and setup ufw
   block:
     - ufw:
-        rule: limit
+        logging: on
+    - ufw:
+        rule: allow
         port: ssh
         proto: tcp
     - ufw:
-        logging: on
-        state: enabled
         default: deny
+        state: enabled
 #+end_src
-** TODO Setup Cloudflare domains on Server [0/1]
-*** TODO Setup terraform for cloudflare
-** TODO Setup headscale on Server
+
+** DONE Setup headscale on Server
+#+begin_src yaml :tangle ansible/roles/headscale/tasks/main.yml :mkdirp yes :comments link
+---
+- name: Get the url to download to
+  become: no
+  local_action:
+    ansible.builtin.shell curl "https://api.github.com/repos/juanfont/headscale/releases/latest" | jq -r '.assets[] | select(.name | endswith("amd64.deb")) | .browser_download_url'
+  register: headscale_deb_url
+
+- name: Install headscale
+  apt:
+    deb: "{{ headscale_deb_url.stdout }}"
+
+- name: Check if headscale_hostname set
+  fail:
+    msg: Set headscale_hostname
+  when: headscale_hostname is not defined
+
+- name: Check if tls_email set
+  fail:
+    msg: Set tls_email
+  when: tls_email is not defined
+- name: Copy the configuration file over
+  template:
+    src: config.yaml.j2
+    dest: /etc/headscale/config.yaml
+    mode: u=rw,g=r,o=r
+
+- name: Enable the headscale service
+  systemd:
+    enabled: true
+    state: started
+    name: headscale
+
+- name: Enable Port 443 for HTTPS
+  ufw:
+    rule: allow
+    port: '443'
+    proto: tcp
+
+#+end_src
+
+Headscale config file
+#+begin_src yaml :tangle ansible/roles/headscale/templates/config.yaml.j2 :mkdirp yes :comments link
+server_url: https://{{ headscale_hostname }}:443
+
+listen_addr: 0.0.0.0:443
+metrics_listen_addr: 127.0.0.1:9090
+
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+private_key_path: /var/lib/headscale/private.key
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+ip_prefixes:
+  - fd7a:115c:a1e0::/48
+  - 100.64.0.0/10
+derp:
+  server:
+    enabled: false
+
+    region_id: 999
+
+    region_code: "headscale"
+    region_name: "Headscale Embedded DERP"
+
+    stun_listen_addr: "0.0.0.0:3478"
+
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+
+  paths: []
+
+  auto_update_enabled: true
+
+  update_frequency: 24h
+
+disable_check_updates: false
+
+ephemeral_node_inactivity_timeout: 30m
+
+node_update_check_interval: 10s
+
+db_type: sqlite3
+
+db_path: /var/lib/headscale/db.sqlite
+
+# TLS
+acme_url: https://acme-v02.api.letsencrypt.org/directory
+acme_email: "{{ tls_email }}"
+
+tls_letsencrypt_hostname: "{{ headscale_hostname }}"
+
+tls_letsencrypt_cache_dir: /var/lib/headscale/cache
+
+tls_letsencrypt_challenge_type: HTTP-01
+tls_letsencrypt_listen: ":http"
+
+## Use already defined certificates:
+tls_cert_path: ""
+tls_key_path: ""
+
+log:
+  # Output formatting for logs: text or json
+  format: text
+  level: info
+
+# Path to a file containg ACL policies.
+# ACLs can be defined as YAML or HUJSON.
+# https://tailscale.com/kb/1018/acls/
+acl_policy_path: ""
+
+## DNS
+#
+# headscale supports Tailscale's DNS configuration and MagicDNS.
+# Please have a look to their KB to better understand the concepts:
+#
+# - https://tailscale.com/kb/1054/dns/
+# - https://tailscale.com/kb/1081/magicdns/
+# - https://tailscale.com/blog/2021-09-private-dns-with-magicdns/
+#
+dns_config:
+  # Whether to prefer using Headscale provided DNS or use local.
+  override_local_dns: true
+
+  # List of DNS servers to expose to clients.
+  nameservers:
+    - 1.1.1.1
+
+  # NextDNS (see https://tailscale.com/kb/1218/nextdns/).
+  # "abc123" is example NextDNS ID, replace with yours.
+  #
+  # With metadata sharing:
+  # nameservers:
+  #   - https://dns.nextdns.io/abc123
+  #
+  # Without metadata sharing:
+  # nameservers:
+  #   - 2a07:a8c0::ab:c123
+  #   - 2a07:a8c1::ab:c123
+
+  # Split DNS (see https://tailscale.com/kb/1054/dns/),
+  # list of search domains and the DNS to query for each one.
+  #
+  # restricted_nameservers:
+  #   foo.bar.com:
+  #     - 1.1.1.1
+  #   darp.headscale.net:
+  #     - 1.1.1.1
+  #     - 8.8.8.8
+
+  # Search domains to inject.
+  domains: []
+
+  # Extra DNS records
+  # so far only A-records are supported (on the tailscale side)
+  # See https://github.com/juanfont/headscale/blob/main/docs/dns-records.md#Limitations
+  # extra_records:
+  #   - name: "grafana.myvpn.example.com"
+  #     type: "A"
+  #     value: "100.64.0.3"
+  #
+  #   # you can also put it in one line
+  #   - { name: "prometheus.myvpn.example.com", type: "A", value: "100.64.0.3" }
+
+  # Whether to use [MagicDNS](https://tailscale.com/kb/1081/magicdns/).
+  # Only works if there is at least a nameserver defined.
+  magic_dns: true
+
+  # Defines the base domain to create the hostnames for MagicDNS.
+  # `base_domain` must be a FQDNs, without the trailing dot.
+  # The FQDN of the hosts will be
+  # `hostname.user.base_domain` (e.g., _myhost.myuser.example.com_).
+  base_domain: {{ headscale_hostname }}
+
+# Unix socket used for the CLI to connect without authentication
+# Note: for production you will want to set this to something like:
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+logtail:
+  enabled: false
+
+# Enabling this option makes devices prefer a random port for WireGuard traffic over the
+# default static port 41641. This option is intended as a workaround for some buggy
+# firewall devices. See https://tailscale.com/kb/1181/firewalls/ for more information.
+randomize_client_port: false
+#+end_src
 ** TODO Headscale on Terraform
 
 ** TODO Setup Tailscale on Server
