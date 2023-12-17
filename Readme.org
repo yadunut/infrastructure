@@ -118,6 +118,10 @@ terraform {
       source = "cloudflare/cloudflare"
       version = "4.20.0"
     }
+    external = {
+      source = "hashicorp/external"
+      version = "2.3.2"
+    }
   }
 }
 
@@ -509,6 +513,52 @@ logtail:
 randomize_client_port: false
 #+end_src
 ** TODO Headscale on Terraform
+So this is abit of a hack. I've got no way of retrieving the API key. So I'll retrieve a short lived api key (5m), but the issue is, this might be called multiple times (every time you run plan), so this might be a bit spammy.
+#+begin_src terraform :tangle offsite/main.tf :comments link
+data "external" "headscale_api_key" {
+    program = ["bash", "${path.module}/get_api_key.sh"]
+}
+#+end_src
+
+#+begin_src bash :tangle offsite/get_api_key.sh :comments link
+API_KEY="$(ssh yadunut@ts.yadunut.com sudo headscale apikeys create -e 5m -o json | tr -d "\"")"
+jq -n --arg api_key $API_KEY '{"api_key":$api_key}'
+#+end_src
+#+begin_src terraform :tangle offsite/main.tf :comments link
+module "headscale" {
+  source = "./headscale"
+  headscale_api_key = data.external.headscale_api_key.result.api_key
+  username = var.username
+  endpoint = "https://${cloudflare_record.ts.hostname}"
+}
+#+end_src
+
+Using p for all my personal devices, so they would be accessed by deviceName.p.ts.domain.dev, and all my servers will be accessible by serverName.s.ts.domain.dev
+#+begin_src terraform :tangle offsite/headscale/main.tf :comments link :mkdirp yes
+terraform {
+  required_providers {
+    headscale = {
+      source = "awlsring/headscale"
+      version = "0.1.5"
+    }
+  }
+}
+
+variable headscale_api_key { type=string }
+variable username { type=string }
+variable endpoint { type=string }
+
+provider "headscale" {
+  endpoint = var.endpoint
+  api_key = var.headscale_api_key
+}
+resource "headscale_user" "personal" {
+    name = "p"
+}
+resource "headscale_user" "servers" {
+    name = "s"
+}
+#+end_src
 
 ** TODO Setup Tailscale on Server
 *** TODO Save Tailscale IP locally / in output
