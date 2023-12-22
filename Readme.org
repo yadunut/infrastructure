@@ -215,20 +215,20 @@ Roles to run when setting up the ansible server.
 The first play would run on first setup, and would not run on second tries. Since the server cannot be accessed via root user anymore, this play will not be able to connect to the given server
 #+begin_src yaml :tangle ansible/setup-offsite.yml :comments link
 ---
-# - hosts: all
-#   remote_user: "root"
-#   roles:
-#     - role: roles/do_setup
-#   ignore_unreachable: true
+- hosts: all
+  remote_user: "root"
+  roles:
+    - role: roles/do_setup
+  ignore_unreachable: true
 
 - hosts: all
   remote_user: "{{ created_username }}"
   become: true
   roles:
-    # - role: roles/common
-    # - role: roles/headscale
+    - role: roles/common
+    - role: roles/headscale
     - role: roles/tailscale
-      ts_user: p
+      ts_user: i
     # - role: consul
 #+end_src
 
@@ -564,12 +564,18 @@ headscale_env_path: "{{ playbook_dir }}/../headscale.env"
   when: headscale_env_stat.stat.exists == false
 #+end_src
 ** DONE figure out how to write the authkeys to a file
-** TODO Setup Tailscale on Server
-*** TODO Save Tailscale IP locally / in output
+** DONE Setup Tailscale on Server
+*** DONE Save Tailscale IP locally / in output
 #+begin_src yaml :tangle ansible/roles/tailscale/tasks/main.yml :mkdirp yes :comments link
 - name: include the headscale vars
   debug:
     msg: "{{ query }}: {{ headscale_key }}"
+  vars:
+    query: "[?user == `{{ ts_user }}`] | [0].key"
+    headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
+
+- name: Connect to the tailscale network
+  command: "tailscale up --auth-key {{ headscale_key }} --login-server https://{{ headscale_hostname }}:443"
   vars:
     query: "[?user == `{{ ts_user }}`] | [0].key"
     headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
