@@ -167,7 +167,6 @@ output "infranut_SGP1_public_ipv4" {
 }
 #+end_src
 
-
 ** Assign domains to the server
 Setup cloudflare on terraform and point an assigned domain to my servers
 #+begin_src terraform :tangle offsite/main.tf :comments link
@@ -216,19 +215,20 @@ Roles to run when setting up the ansible server.
 The first play would run on first setup, and would not run on second tries. Since the server cannot be accessed via root user anymore, this play will not be able to connect to the given server
 #+begin_src yaml :tangle ansible/setup-offsite.yml :comments link
 ---
-- hosts: all
-  remote_user: "root"
-  roles:
-    - role: roles/do_setup
-  ignore_unreachable: true
+# - hosts: all
+#   remote_user: "root"
+#   roles:
+#     - role: roles/do_setup
+#   ignore_unreachable: true
 
 - hosts: all
   remote_user: "{{ created_username }}"
   become: true
   roles:
-    - role: roles/common
-    - role: roles/headscale
-    # - role: tailscale
+    # - role: roles/common
+    # - role: roles/headscale
+    - role: roles/tailscale
+      ts_user: p
     # - role: consul
 #+end_src
 
@@ -362,7 +362,8 @@ Setup for almost any server. The common tasks of installing required dependencie
     rule: allow
     port: '443'
     proto: tcp
-
+- name: setup users on headscale
+  import_tasks: setup_users.yml
 #+end_src
 
 Headscale config file
@@ -512,53 +513,64 @@ logtail:
 # firewall devices. See https://tailscale.com/kb/1181/firewalls/ for more information.
 randomize_client_port: false
 #+end_src
-** TODO Headscale on Terraform
-So this is abit of a hack. I've got no way of retrieving the API key. So I'll retrieve a short lived api key (5m), but the issue is, this might be called multiple times (every time you run plan), so this might be a bit spammy.
-#+begin_src terraform :tangle offsite/main.tf :comments link
-data "external" "headscale_api_key" {
-    program = ["bash", "${path.module}/get_api_key.sh"]
-}
+** DONE Headscale on +Terraform+ Ansible
+Wait I initially did this in terraform but it should be done in ansible instead... so much easier.
+
+The 3 users created are
+- p for personal (My laptop, phones, etc),
+- s for servers (nomad / etc)
+- i for infra (my proxmox hosts)
+
+#+begin_src yaml :tangle ansible/roles/headscale/vars/main.yml :mkdirp yes
+install_users: ['p', 's', 'i']
+headscale_env_path: "{{ playbook_dir }}/../headscale.env"
 #+end_src
 
-#+begin_src bash :tangle offsite/get_api_key.sh :comments link
-API_KEY="$(ssh yadunut@ts.yadunut.com sudo headscale apikeys create -e 5m -o json | tr -d "\"")"
-jq -n --arg api_key $API_KEY '{"api_key":$api_key}'
+#+begin_src yaml :tangle ansible/roles/headscale/tasks/setup_users.yml :mkdirp yes :comments link
+---
+- name: Retrieve the list of existing users
+  command: headscale users list -o json-line
+  register: users
+
+- name: Install users
+  command: "headscale users create {{ item }}"
+  loop:
+    "{{ install_users | difference(users.stdout|from_json is none|ternary([], users.stdout|from_json|json_query('[].name'))) }}"
+    # a bit of json parsing and handling to only install users that have not been installed
+- name: check if headscale env exists locally
+  become: no
+  local_action:
+    module: stat
+    path: "{{ headscale_env_path }}"
+  register: headscale_env_stat
+
+- name: Get authkey for each user
+  command: "headscale authkey create --reusable -e 1y -o json -u {{ item }}"
+  register: user_authkeys
+  loop: "{{ install_users }}"
+  when: headscale_env_stat.stat.exists == false
+
+- name: debug file contents
+  debug:
+    msg: "{{ user_authkeys.results | map(attribute='stdout') | map('from_json')|json_query('[].{key: key, user: user}')|to_yaml(indent=2) }}"
+  when: headscale_env_stat.stat.exists == false
+
+- name: Write the retrieved api keys to local
+  become: no
+  local_action:
+    module: copy
+    content: "{{ user_authkeys.results | map(attribute='stdout') | map('from_json')|json_query('[].{key: key, user: user}')|to_yaml }}"
+    dest: "{{ headscale_env_path }}"
+  when: headscale_env_stat.stat.exists == false
 #+end_src
-#+begin_src terraform :tangle offsite/main.tf :comments link
-module "headscale" {
-  source = "./headscale"
-  headscale_api_key = data.external.headscale_api_key.result.api_key
-  username = var.username
-  endpoint = "https://${cloudflare_record.ts.hostname}"
-}
-#+end_src
-
-Using p for all my personal devices, so they would be accessed by deviceName.p.ts.domain.dev, and all my servers will be accessible by serverName.s.ts.domain.dev
-#+begin_src terraform :tangle offsite/headscale/main.tf :comments link :mkdirp yes
-terraform {
-  required_providers {
-    headscale = {
-      source = "awlsring/headscale"
-      version = "0.1.5"
-    }
-  }
-}
-
-variable headscale_api_key { type=string }
-variable username { type=string }
-variable endpoint { type=string }
-
-provider "headscale" {
-  endpoint = var.endpoint
-  api_key = var.headscale_api_key
-}
-resource "headscale_user" "personal" {
-    name = "p"
-}
-resource "headscale_user" "servers" {
-    name = "s"
-}
-#+end_src
-
+** DONE figure out how to write the authkeys to a file
 ** TODO Setup Tailscale on Server
 *** TODO Save Tailscale IP locally / in output
+#+begin_src yaml :tangle ansible/roles/tailscale/tasks/main.yml :mkdirp yes :comments link
+- name: include the headscale vars
+  debug:
+    msg: "{{ query }}: {{ headscale_key }}"
+  vars:
+    query: "[?user == `{{ ts_user }}`] | [0].key"
+    headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
+#+end_src
