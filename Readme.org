@@ -35,9 +35,10 @@ provider_installation {
 TF_VAR_do_token="op://Infrastructure/Digitalocean token/password"
 TF_VAR_cf_token="op://Infrastructure/Cloudflare Token/credential"
 TF_VAR_cf_zone="op://Infrastructure/Cloudflare Token/zone"
-TF_VAR_cf_account="op://Infrastructure/Cloudflare Token/account"
 TF_VAR_ssh_public_key="op://Infrastructure/yadunut/public key"
 TF_VAR_headscale_tls_email="op://Infrastructure/Headscale/tls_email"
+TF_VAR_headscale_tls_email="op://Infrastructure/Headscale/tls_email"
+TF_VAR_proxmox_servers="op://Infrastructure/Miscellaneous/proxmox_servers"
 #+end_src
 
 I'm using justfile just to make running commands easier
@@ -54,17 +55,35 @@ terraform *ARGS:
 
 ** Setup Terraform
 #+begin_src terraform :tangle main.tf :mkdirp yes :comments link
-terraform { }
-
-module "offsite" {
-  source = "./offsite"
-  do_token = var.do_token
-  ssh_public_key = var.ssh_public_key
-  cf_token = var.cf_token
-  cf_zone = var.cf_zone
-  cf_account = var.cf_account
-  headscale_tls_email = var.headscale_tls_email
+terraform {
+  required_providers {
+    digitalocean = {
+      source = "digitalocean/digitalocean"
+      version = "2.32.0"
+    }
+    ansible = {
+      source = "ansible/ansible"
+      version = "1.1.0"
+    }
+    external = {
+      source = "hashicorp/external"
+      version = "2.3.2"
+    }
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+      version = "4.20.0"
+    }
+  }
 }
+
+provider "cloudflare" {
+  api_token = var.cf_token
+}
+
+provider "digitalocean" {
+  token = var.do_token
+}
+
 #+end_src
 
 Setup variables needed
@@ -78,64 +97,18 @@ variable cf_token {
   sensitive=true
 }
 variable cf_zone { type=string }
-variable cf_account { type=string }
 variable ssh_public_key { type=string }
 variable headscale_tls_email { type=string }
-#+end_src
 
-#+begin_src terraform :tangle offsite/variables.tf :mkdirp yes :comments link
-variable do_token {
-  type=string
-  sensitive=true
-}
-variable cf_token {
-  type=string
-  sensitive=true
-}
-variable cf_zone { type=string }
-variable cf_account { type=string }
-variable ssh_public_key { type=string }
-variable headscale_tls_email { type=string }
+variable proxmox_servers { type=list(string) }
 variable username {
   type=string
   default = "yadunut"
 }
 #+end_src
 
-Setup terraform providers
-#+begin_src terraform :tangle offsite/main.tf :comments link
-terraform {
-  required_providers {
-    digitalocean = {
-      source = "digitalocean/digitalocean"
-      version = "2.32.0"
-    }
-    ansible = {
-      source = "ansible/ansible"
-      version = "1.1.0"
-    }
-    cloudflare = {
-      source = "cloudflare/cloudflare"
-      version = "4.20.0"
-    }
-    external = {
-      source = "hashicorp/external"
-      version = "2.3.2"
-    }
-  }
-}
-
-provider "digitalocean" {
-  token = var.do_token
-}
-
-provider "cloudflare" {
-  api_token = var.cf_token
-}
-#+end_src
-
 Import SSH Key
-#+begin_src terraform :tangle offsite/main.tf :comments link
+#+begin_src terraform :tangle main.tf :comments link
 resource "digitalocean_ssh_key" "yadunut" {
   name = "yadunut"
   public_key = var.ssh_public_key
@@ -153,7 +126,7 @@ terraform import digitalocean_ssh_key.yadunut <id>
 ** Spin up digital ocean server
 
 Spin up a VM. On the ansible side, I'm giving it the username, that will eventually be used, but for the initial setup, I'm expecting to login via root to configure and setup the VMs
-#+begin_src terraform :tangle offsite/main.tf :comments link
+#+begin_src terraform :tangle main.tf :comments link
 resource "digitalocean_droplet" "infranut_SGP1" {
   image  = "ubuntu-22-04-x64"
   name   = "infranut-SGP1"
@@ -161,15 +134,11 @@ resource "digitalocean_droplet" "infranut_SGP1" {
   size   = "s-1vcpu-1gb"
   ssh_keys = [digitalocean_ssh_key.yadunut.id]
 }
-
-output "infranut_SGP1_public_ipv4" {
-  value = digitalocean_droplet.infranut_SGP1.ipv4_address
-}
 #+end_src
 
 ** Assign domains to the server
 Setup cloudflare on terraform and point an assigned domain to my servers
-#+begin_src terraform :tangle offsite/main.tf :comments link
+#+begin_src terraform :tangle main.tf :comments link
 resource "cloudflare_record" "ts" {
   zone_id = var.cf_zone
   name = "ts"
@@ -194,7 +163,7 @@ project_path: ../
 
 Run the ansible playbook in terraform. I have no idea why this fails, and at this point, I'm giving up figuring out why.
 Updating ansible-provider to the latest one from github resolves this issue
-#+begin_src terraform :tangle offsite/main.tf :comments link
+#+begin_src terraform :tangle main.tf :comments link
 resource "ansible_playbook" "setup_offsite" {
   playbook = "ansible/setup-offsite.yml"
   # replayable = false
@@ -525,7 +494,6 @@ The 3 users created are
 install_users: ['p', 's', 'i']
 headscale_env_path: "{{ playbook_dir }}/../headscale.env"
 #+end_src
-
 #+begin_src yaml :tangle ansible/roles/headscale/tasks/setup_users.yml :mkdirp yes :comments link
 ---
 - name: Retrieve the list of existing users
@@ -565,7 +533,6 @@ headscale_env_path: "{{ playbook_dir }}/../headscale.env"
 #+end_src
 ** DONE figure out how to write the authkeys to a file
 ** DONE Setup Tailscale on Server
-*** DONE Save Tailscale IP locally / in output
 #+begin_src yaml :tangle ansible/roles/tailscale/tasks/main.yml :mkdirp yes :comments link
 - name: include the headscale vars
   debug:
@@ -575,8 +542,33 @@ headscale_env_path: "{{ playbook_dir }}/../headscale.env"
     headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
 
 - name: Connect to the tailscale network
-  command: "tailscale up --auth-key {{ headscale_key }} --login-server https://{{ headscale_hostname }}:443"
+  command: "tailscale up --force-reauth --auth-key {{ headscale_key }} --login-server https://{{ headscale_hostname }}:443"
   vars:
     query: "[?user == `{{ ts_user }}`] | [0].key"
     headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
+#+end_src
+
+* Proxmox Servers
+
+#+begin_src terraform :tangle main.tf :comments link :mkdirp yes
+resource "ansible_playbook" "setup_proxmox" {
+  playbook = "ansible/setup-proxmox-server.yml"
+  # replayable = false
+  name = each.key
+  replayable = false
+  for_each = toset(var.proxmox_servers)
+  extra_vars = {
+    headscale_hostname = cloudflare_record.ts.hostname
+  }
+}
+#+end_src
+
+#+begin_src yaml :tangle ansible/setup-proxmox-server.yml :comments link :mkdirp yes
+---
+- hosts: all
+  remote_user: "root"
+  become: true
+  roles:
+    - role: roles/tailscale
+      ts_user: i
 #+end_src
