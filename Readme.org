@@ -73,6 +73,10 @@ terraform {
       source = "cloudflare/cloudflare"
       version = "4.20.0"
     }
+    local = {
+      source = "hashicorp/local"
+      version = "2.4.1"
+    }
   }
 }
 
@@ -196,9 +200,6 @@ The first play would run on first setup, and would not run on second tries. Sinc
   roles:
     - role: roles/common
     - role: roles/headscale
-    - role: roles/tailscale
-      ts_user: i
-    # - role: consul
 #+end_src
 
 Useful initial setup for digital ocean ubuntu servers
@@ -331,8 +332,29 @@ Setup for almost any server. The common tasks of installing required dependencie
     rule: allow
     port: '443'
     proto: tcp
-- name: setup users on headscale
-  import_tasks: setup_users.yml
+
+- name: Check if API key exists locally
+  become: no
+  local_action:
+    module: stat
+    path: "{{ headscale_env_path }}"
+  register: headscale_env_stat
+- name: Get API Key
+  command: "headscale api create -e 1y -o yaml"
+  register: headscale_apikey
+  when: headscale_env_stat.stat.exists == false
+
+- name: debug apikey
+  debug:
+    msg: "hs_apikey: {{ headscale_apikey }}"
+
+- name: write api key locally
+  become: no
+  local_action:
+    module: copy
+    content: "{{ headscale_apikey.stdout }}"
+    dest: "{{ headscale_env_path }}"
+  when: headscale_env_stat.stat.exists == false
 #+end_src
 
 Headscale config file
@@ -534,39 +556,85 @@ headscale_env_path: "{{ playbook_dir }}/../headscale.env"
 ** DONE figure out how to write the authkeys to a file
 ** DONE Setup Tailscale on Server
 #+begin_src yaml :tangle ansible/roles/tailscale/tasks/main.yml :mkdirp yes :comments link
-- name: include the headscale vars
-  debug:
-    msg: "{{ query }}: {{ headscale_key }}"
-  vars:
-    query: "[?user == `{{ ts_user }}`] | [0].key"
-    headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
-
 - name: Connect to the tailscale network
-  command: "tailscale up --force-reauth --auth-key {{ headscale_key }} --login-server https://{{ headscale_hostname }}:443"
-  vars:
-    query: "[?user == `{{ ts_user }}`] | [0].key"
-    headscale_key: "{{ lookup('file', playbook_dir + '/../headscale.env') | from_yaml|json_query(query) }}"
+  command: "tailscale up --force-reauth --auth-key {{ auth_key }} --login-server https://{{ hostname }}:443"
 #+end_src
 
-* Proxmox Servers
+** Setup Headscale users
+#+begin_src terraform :tangle main.tf :comments link
+data "local_file" "hs_apikey" {
+  filename = "${path.module}/headscale.env"
+  depends_on = [ ansible_playbook.setup_offsite ]
+}
 
-#+begin_src terraform :tangle main.tf :comments link :mkdirp yes
-resource "ansible_playbook" "setup_proxmox" {
-  playbook = "ansible/setup-proxmox-server.yml"
-  # replayable = false
-  name = each.key
-  replayable = false
-  for_each = toset(var.proxmox_servers)
-  extra_vars = {
-    headscale_hostname = cloudflare_record.ts.hostname
-  }
+module "headscale" {
+  source = "./modules/headscale"
+  apikey = data.local_file.hs_apikey.content
+  endpoint = cloudflare_record.ts.hostname
 }
 #+end_src
 
-#+begin_src yaml :tangle ansible/setup-proxmox-server.yml :comments link :mkdirp yes
+#+begin_src terraform :tangle modules/headscale/main.tf :comments link :mkdirp yes
+variable "apikey" { type=string }
+variable "endpoint" { type=string }
+terraform {
+  required_providers {
+    headscale = {
+      source = "awlsring/headscale"
+      version = "0.1.5"
+    }
+  }
+}
+
+provider "headscale" {
+  endpoint = "https://${var.endpoint}"
+  api_key = var.apikey
+}
+
+resource "headscale_user" "server" {
+    name = "s"
+}
+resource "headscale_user" "personal" {
+    name = "p"
+}
+resource "headscale_user" "infra" {
+    name = "i"
+}
+
+resource "headscale_pre_auth_key" "server" {
+    user = headscale_user.server.name
+}
+resource "headscale_pre_auth_key" "infra" {
+    user = headscale_user.infra.name
+}
+
+output "server_key" {
+  value = headscale_pre_auth_key.server
+}
+output "infra_key" {
+  value = headscale_pre_auth_key.infra
+}
+#+end_src
+* Proxmox Servers
+
+#+begin_src terraform :tangle main.tf :comments link :mkdirp yes
+resource "ansible_playbook" "setup_tailscale" {
+  playbook = "ansible/setup-tailscale.yml"
+  replayable = false
+  extra_vars = {
+    hostname = cloudflare_record.ts.hostname
+    auth_key = module.headscale.infra_key.key
+    created_username = var.username
+  }
+  name = each.key
+  for_each = toset(concat(var.proxmox_servers, tolist([digitalocean_droplet.infranut_SGP1.ipv4_address])))
+}
+#+end_src
+
+#+begin_src yaml :tangle ansible/setup-tailscale.yml :comments link :mkdirp yes
 ---
 - hosts: all
-  remote_user: "root"
+  remote_user: "{{ created_username }}"
   become: true
   roles:
     - role: roles/tailscale
