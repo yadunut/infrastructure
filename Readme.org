@@ -44,6 +44,12 @@ PM_USER="op://Infrastructure/terraform-prov/username"
 PM_PASS="op://Infrastructure/terraform-prov/password"
 #+end_src
 
+#+begin_src env :tangle .ansible-env
+CONSUL_RAW_KEY="op://Infrastructure/Consul Gossip Key/password"
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+ANSIBLE_HOST_KEY_CHECKING=false
+#+end_src
+
 I'm using justfile just to make running commands easier
 
 #+begin_src just :tangle justfile
@@ -54,6 +60,9 @@ default:
 
 terraform *ARGS:
   op run --env-file=".env" --no-masking -- terraform {{ARGS}}
+
+ansible-playbook *ARGS:
+  op run --env-file=".ansible-env" --  ansible-playbook {{ARGS}}
 #+end_src
 
 ** Setup Terraform
@@ -95,6 +104,7 @@ provider "digitalocean" {
   token = var.do_token
 }
 
+provider "proxmox" {}
 #+end_src
 
 Setup variables needed
@@ -167,9 +177,13 @@ collections:
 
 roles:
   - name: geerlingguy.docker
+  - src: https://github.com/ansible-community/ansible-consul.git
+    name: ansible-consul
+    scm: git
+    version: master
 #+end_src
 
-#+begin_src yaml :tangle ansible/inventory.yml :comments link
+#+begin_src yaml :tangle ansible/inventory.yml :comments link :tangle no
 ---
 plugin: cloud.terraform.terraform_provider
 project_path: ../
@@ -655,10 +669,9 @@ resource "ansible_playbook" "setup_tailscale" {
       ts_user: i
 #+end_src
 
-* Proxmox Servers
+* Proxmox Nomad Servers
 Create VMs on proxmox.
 #+begin_src terraform :tangle main.tf :comments link
-provider "proxmox" {}
 resource "proxmox_vm_qemu" "nomad-server" {
   for_each    = toset(["eagle", "falcon"])
   name        = "nomad-server-${each.key}"
@@ -705,10 +718,7 @@ Setup VMs on Proxmox with ansible
   roles:
     - role: roles/common
     - role: roles/tailscale
-    - role: geerlingguy.docker
-      docker_users:
-        - "{{ created_username }}"
-    # - role: roles/nomad
+    # - role: roles/nomad-server
 #+end_src
 
 Run ansible on those VMs
@@ -723,5 +733,123 @@ resource "ansible_playbook" "setup_proxmox_servers" {
   }
   name = each.value.default_ipv4_address
   for_each = proxmox_vm_qemu.nomad-server
+}
+#+end_src
+
+* Setup Proxmox Nomad Clients
+
+#+begin_src terraform :tangle main.tf :comments link
+resource "proxmox_vm_qemu" "nomad-client" {
+  for_each    = { for val in setproduct(["falcon", "eagle"], [1, 2]): "${val[0]}-${val[1]}" => val }
+  name        = "nomad-client-${each.key}"
+  target_node = each.value[0]
+  clone       = "ubuntu-2204-cloud-init"
+  agent       = 1
+  full_clone  = true
+  onboot      = true
+
+  tags = "nomad-client"
+
+  memory = 2048
+  cores  = 2
+  scsihw = "virtio-scsi-single" # If i dont have this, the defaults override the cloned info
+
+  qemu_os = "l26"
+
+  sshkeys = digitalocean_ssh_key.yadunut.public_key
+  ipconfig0 = "ip=dhcp,ip6=dhcp"
+  ciuser = var.username
+
+  network {
+        bridge    = "vmbr0"
+        firewall  = true
+        link_down = false
+        model     = "virtio"
+        mtu       = 0
+        queues    = 0
+        rate      = 0
+        tag       = -1
+    }
+  lifecycle {
+    ignore_changes = [disk, network]
+  }
+}
+#+end_src
+
+#+begin_src yaml :tangle ansible/setup-proxmox-clients.yml :comments link
+---
+- hosts: all
+  remote_user: "{{ created_username }}"
+  become: true
+  roles:
+    - role: roles/common
+    - role: roles/tailscale
+    - role: geerlingguy.docker
+      docker_users:
+        - "{{ created_username }}"
+    # - role: roles/nomad-client
+    #+end_src
+
+#+begin_src terraform :tangle main.tf :comments link
+resource "ansible_playbook" "setup_proxmox_clients" {
+  playbook = "ansible/setup-proxmox-clients.yml"
+  replayable = false
+  extra_vars = {
+    hostname = cloudflare_record.ts.hostname
+    auth_key = module.headscale.server_key.key
+    created_username = var.username
+  }
+  name = each.value.default_ipv4_address
+  for_each = proxmox_vm_qemu.nomad-client
+}
+#+end_src
+
+* Ansible Inventory
+This is the point where all the automated stuff goes out of the window. Firstly create an inventory file with the tailscale addresses generated from above. replace offsite/server?/client? with the tailscale urls of the server
+#+begin_src yaml :tangle ansible/inventory.yml :tangle no :comments link
+---
+consul_instances:
+  hosts:
+    offsite:
+      consul_node_role: bootstrap
+    server1:
+      consul_node_role: server
+    server2:
+      consul_node_role: server
+    client1:
+      consul_node_role: client
+    client2:
+      consul_node_role: client
+    client3:
+      consul_node_role: client
+    client4:
+      consul_node_role: client
+#+end_src
+
+* Consul
+#+begin_src yaml :tangle ansible/setup-consul.yml :comments link
+---
+- hosts: consul_instances
+  remote_user: yadunut
+  become: true
+  roles:
+    - role: ansible-consul
+      consul_version: latest
+      consul_raw_key: "{{ lookup(env, 'CONSUL_RAW_KEY') }}"
+      consul_iface: tailscale0
+      consul_client_address: "0.0.0.0"
+#+end_src
+
+#+begin_src yaml :tangle ansible/roles/nomad_server/tasks/main.yaml :mkdirp yes :comments link
+
+#+end_src
+
+#+begin_src hcl :tangle ansible/roles/nomad_server/templates/nomad.hcl.j2 :mkdirp yes :comments link
+datacenter = "dc1"
+data_dir = "/opt/nomad"
+
+server {
+  enabled = true
+  bootstrap_expect = 3
 }
 #+end_src
