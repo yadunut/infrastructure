@@ -46,6 +46,7 @@ PM_PASS="op://Infrastructure/terraform-prov/password"
 
 #+begin_src env :tangle .ansible-env
 CONSUL_RAW_KEY="op://Infrastructure/Consul Gossip Key/password"
+NOMAD_GOSSIP_KEY="op://Infrastructure/Nomad Gossip Key/password"
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
 ANSIBLE_HOST_KEY_CHECKING=false
 #+end_src
@@ -718,7 +719,6 @@ Setup VMs on Proxmox with ansible
   roles:
     - role: roles/common
     - role: roles/tailscale
-    # - role: roles/nomad-server
 #+end_src
 
 Run ansible on those VMs
@@ -787,7 +787,6 @@ resource "proxmox_vm_qemu" "nomad-client" {
     - role: geerlingguy.docker
       docker_users:
         - "{{ created_username }}"
-    # - role: roles/nomad-client
     #+end_src
 
 #+begin_src terraform :tangle main.tf :comments link
@@ -812,18 +811,25 @@ consul_instances:
   hosts:
     offsite:
       consul_node_role: bootstrap
+      nomad_node_role: both
     server1:
       consul_node_role: server
+      nomad_node_role: server
     server2:
       consul_node_role: server
+      nomad_node_role: server
     client1:
       consul_node_role: client
+      nomad_node_role: client
     client2:
       consul_node_role: client
+      nomad_node_role: client
     client3:
       consul_node_role: client
+      nomad_node_role: client
     client4:
       consul_node_role: client
+      nomad_node_role: client
 #+end_src
 
 * Consul
@@ -835,21 +841,254 @@ consul_instances:
   roles:
     - role: ansible-consul
       consul_version: latest
-      consul_raw_key: "{{ lookup(env, 'CONSUL_RAW_KEY') }}"
+      consul_raw_key: "{{ lookup('env', 'CONSUL_RAW_KEY') }}"
       consul_iface: tailscale0
       consul_client_address: "0.0.0.0"
 #+end_src
 
-#+begin_src yaml :tangle ansible/roles/nomad_server/tasks/main.yaml :mkdirp yes :comments link
+* Nomad
+
+#+begin_src yaml :tangle ansible/setup-nomad.yml :mkdirp yes :comments link
+---
+- hosts: consul_instances
+  remote_user: yadunut
+  become: true
+  roles:
+    - role: roles/nomad
+      nomad_iface: tailscale0
+      nomad_group_name: consul_instances
+      nomad_docker_enable: true
+      nomad_use_consul: true
+      nomad_gossip_key: "{{ lookup('env', 'NOMAD_GOSSIP_KEY') }}"
+#+end_src
+
+
+#+begin_src yaml :tangle ansible/roles/nomad/defaults/main.yml :mkdirp yes :comments link
+---
+nomad_config_path: "/etc/nomad.d"
+nomad_data_path: "/opt/nomad"
+
+nomad_user: nomad
+nomad_group: nomad
+nomad_datacenter: dc1
+
+nomad_systemd_unit_path: "/etc/systemd/system"
+
+nomad_node_name: "{{ inventory_hostname_short }}"
+
+nomad_bind_address: "{{ hostvars[inventory_hostname]['ansible_'+ nomad_iface ]['ipv4']['address'] }}"
+nomad_advertise_address: "{{ hostvars[inventory_hostname]['ansible_' + nomad_iface]['ipv4']['address'] }}"
+
+nomad_consul_address: "localhost:8500"
+
+nomad_bootstrap_expect: "{{ nomad_servers | count or 3 }}"
+nomad_group_name: "nomad_instances"
 
 #+end_src
 
-#+begin_src hcl :tangle ansible/roles/nomad_server/templates/nomad.hcl.j2 :mkdirp yes :comments link
-datacenter = "dc1"
-data_dir = "/opt/nomad"
+#+begin_src yaml :tangle ansible/roles/nomad/vars/main.yml :mkdirp yes :comments link
+---
+_nomad_node_client: "{{ (nomad_node_role == 'client') or (nomad_node_role == 'both') }}"
+_nomad_node_server: "{{ (nomad_node_role == 'server') or (nomad_node_role == 'both') }}"
+#+end_src
 
+#+begin_src yaml :tangle ansible/roles/nomad/tasks/main.yml :mkdirp yes :comments link
+---
+- name: Expose bind_address, advertise_address and node_role as facts
+  set_fact:
+    nomad_bind_address: "{{ nomad_bind_address }}"
+    nomad_advertise_address: "{{ nomad_advertise_address }}"
+    nomad_node_role: "{{ nomad_node_role }}"
+    nomad_datacenter: "{{ nomad_datacenter }}"
+
+- name: Add Nomad group
+  group:
+    name: "{{ nomad_group }}"
+    state: present
+
+# Add user
+- name: Add Nomad user
+  user:
+    name: "{{ nomad_user }}"
+    comment: "Nomad user"
+    group: "{{ nomad_group }}"
+    system: true
+
+- name: Add Nomad user to docker group
+  user:
+    name: "{{ nomad_user }}"
+    groups: docker
+    append: true
+  when:
+    - _nomad_node_client | bool
+
+- name: Install Nomad
+  apt:
+    pkg:
+      - nomad
+    state: latest
+
+- name: Create directories
+  file:
+    dest: "{{ item }}"
+    state: directory
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0755"
+  with_items:
+    - "{{ nomad_data_path }}"
+
+- name: Create config directory
+  file:
+    dest: "{{ nomad_config_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Common Configuration
+  template:
+    src: nomad.hcl.j2
+    dest: "{{ nomad_config_path }}/nomad.hcl"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Server configuration
+  template:
+    src: server.hcl.j2
+    dest: "{{ nomad_config_path }}/server.hcl"
+    owner: root
+    group: root
+    mode: 0644
+  when:
+    - _nomad_node_server | bool
+
+- name: Client configuration
+  template:
+    src: client.hcl.j2
+    dest: "{{ nomad_config_path }}/client.hcl"
+    owner: root
+    group: root
+    mode: 0644
+  when:
+    - _nomad_node_client | bool
+
+- block:
+    - name: systemd script
+      template:
+        src: "nomad_systemd.service.j2"
+        dest: "{{ nomad_systemd_unit_path }}/nomad.service"
+        owner: root
+        group: root
+        mode: 0644
+      register: nomad_systemd_file
+    - block:
+      - name: reload systemd daemon
+        systemd:
+          daemon_reload: true
+      - name: Enable nomad at startup (systemd)
+        systemd:
+          name: nomad
+          enabled: yes
+      when: nomad_systemd_file.changed
+  when: ansible_service_mgr == "systemd"
+
+- name: Start Nomad
+  service:
+    name: nomad
+    enabled: true
+    state: restarted
+#+end_src
+
+#+begin_src j2 :tangle ansible/roles/nomad/templates/nomad_systemd.service.j2 :mkdirp yes
+[Unit]
+Description=Nomad
+Documentation=https://nomadproject.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+{% if _nomad_node_client %}
+User=root
+Group=root
+{% else %}
+User={{ nomad_user }}
+Group={{ nomad_group }}
+{% endif %}
+
+
+ExecStart=/usr/bin/nomad agent -config {{ nomad_config_path }}
+EnvironmentFile=-/etc/nomad.d/nomad.env
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+KillSignal=SIGINT
+LimitNOFILE=65536
+LimitNPROC=infinity
+Restart=on-failure
+RestartSec=2
+
+TasksMax=infinity
+OOMScoreAdjust=-1000
+
+[Install]
+WantedBy=multi-user.target
+#+end_src
+
+#+begin_src hcl :tangle ansible/roles/nomad/templates/nomad.hcl.j2
+data_dir = "{{ nomad_data_path }}"
+
+name = "{{ nomad_node_name }}"
+datacenter = "{{ nomad_datacenter }}"
+
+bind_addr = "{{ nomad_bind_address }}"
+
+enable_syslog = true
+
+advertise {
+    http = "{{ nomad_advertise_address }}"
+    rpc = "{{ nomad_advertise_address }}"
+    serf = "{{ nomad_advertise_address }}"
+}
+
+consul {
+    # The address to the Consul agent.
+    address = "{{ nomad_consul_address }}"
+    # The service name to register the server and client with Consul.
+    server_service_name = "nomad-server"
+    client_service_name = "nomad-client"
+
+    # Enables automatically registering the services.
+    auto_advertise = true
+
+    # Enabling the server and client to bootstrap using Consul.
+    server_auto_join = true
+    client_auto_join = true
+}
+
+ui {
+  enabled = true
+}
+#+end_src
+
+#+begin_src hcl :tangle ansible/roles/nomad/templates/server.hcl.j2
 server {
   enabled = true
-  bootstrap_expect = 3
+  encrypt = "{{ nomad_gossip_key }}"
+  bootstrap_expect = 3 # I'm too lazy to figure out how to dynamically derive this number from nomad_node_role == 'server'
+}
+#+end_src
+
+#+begin_src hcl :tangle ansible/roles/nomad/templates/client.hcl.j2
+client {
+  enabled = true
+}
+
+plugin "docker" {
+  config {
+    volumes {
+      enabled = true
+    }
+  }
 }
 #+end_src
