@@ -42,3 +42,4 @@ terraform.rc
 
 # End of https://www.toptal.com/developers/gitignore/api/terraform,ansible
 headscale.env
+ansible/inventory.yml

@@ -1,0 +1,24 @@
+datacenter =  "{{ consul_datacenter }}"
+bind_addr = "{{ consul_bind_address }}"
+advertise_addr = "{{ consul_advertise_address }}"
+advertise_addr_wan = "{{ consul_advertise_address_wan }}"
+data_dir = "{{ consul_data_path }}"
+log_file = "{{ consul_log_path }}/{{ consul_log_file }}"
+encrypt = "{{ consul_raw_key }}"
+
+{% for server in _consul_lan_servers %}
+  {% set _ = consul_join.append(hostvars[server]['consul_advertise_address'] | default(hostvars[server]['consul_bind_address']) | default(hostvars[server]['ansible_default_ipv4']['address']) | mandatory) %}
+{% endfor %}
+retry_join = {{ consul_join | map('ansible.utils.ipwrap') | list | to_json }}
+
+
+{% if (consul_node_role == 'server') or (consul_node_role == 'bootstrap') %}
+server = true
+bootstrap = {{ (consul_node_role == 'bootstrap') | bool | to_json }}
+{% endif %}
+
+ui_config {
+  enabled = true
+}
+
+client_addr = "{{ consul_client_address }}"

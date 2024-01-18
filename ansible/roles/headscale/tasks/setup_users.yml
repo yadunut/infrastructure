@@ -1,0 +1,37 @@
+# [[file:../../../../Readme.org::*Headscale on +Terraform+ Ansible][Headscale on +Terraform+ Ansible:2]]
+---
+- name: Retrieve the list of existing users
+  command: headscale users list -o json-line
+  register: users
+
+- name: Install users
+  command: "headscale users create {{ item }}"
+  loop:
+    "{{ install_users | difference(users.stdout|from_json is none|ternary([], users.stdout|from_json|json_query('[].name'))) }}"
+    # a bit of json parsing and handling to only install users that have not been installed
+- name: check if headscale env exists locally
+  become: no
+  local_action:
+    module: stat
+    path: "{{ headscale_env_path }}"
+  register: headscale_env_stat
+
+- name: Get authkey for each user
+  command: "headscale authkey create --reusable -e 1y -o json -u {{ item }}"
+  register: user_authkeys
+  loop: "{{ install_users }}"
+  when: headscale_env_stat.stat.exists == false
+
+- name: debug file contents
+  debug:
+    msg: "{{ user_authkeys.results | map(attribute='stdout') | map('from_json')|json_query('[].{key: key, user: user}')|to_yaml(indent=2) }}"
+  when: headscale_env_stat.stat.exists == false
+
+- name: Write the retrieved api keys to local
+  become: no
+  local_action:
+    module: copy
+    content: "{{ user_authkeys.results | map(attribute='stdout') | map('from_json')|json_query('[].{key: key, user: user}')|to_yaml }}"
+    dest: "{{ headscale_env_path }}"
+  when: headscale_env_stat.stat.exists == false
+# Headscale on +Terraform+ Ansible:2 ends here

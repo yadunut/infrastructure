@@ -1,0 +1,12 @@
+# [[file:../Readme.org::*Consul][Consul:1]]
+---
+- hosts: consul_instances
+  remote_user: yadunut
+  become: true
+  roles:
+    - role: roles/consul
+      consul_raw_key: "{{ lookup('env', 'CONSUL_RAW_KEY') }}"
+      consul_iface: tailscale0
+      consul_client_address: "0.0.0.0"
+      consul_install_from_repo: true
+# Consul:1 ends here

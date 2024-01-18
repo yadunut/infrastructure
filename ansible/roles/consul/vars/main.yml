@@ -1,0 +1,9 @@
+_consul_lan_servers: "\
+  {% set __consul_lan_servers = [] %}\
+  {% for server in consul_servers %}\
+    {% set _consul_datacenter = hostvars[server]['consul_datacenter'] | default('dc1', true) %}\
+    {% if _consul_datacenter == consul_datacenter %}\
+      {% if __consul_lan_servers.append(server) %}{% endif %}\
+    {% endif %}\
+  {% endfor %}\
+  {{ __consul_lan_servers }}"

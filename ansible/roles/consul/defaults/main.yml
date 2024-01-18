@@ -1,0 +1,41 @@
+---
+# default variables
+
+consul_iface: "{{ lookup('env','CONSUL_IFACE') | default(ansible_default_ipv4.interface, true) }}"
+
+consul_bind_address: "\
+    {{ lookup('env','CONSUL_BIND_ADDRESS') | default(hostvars[inventory_hostname]['ansible_'+ consul_iface | replace('-', '_')]['ipv4']['address'], true) }}"
+
+consul_advertise_address_wan: "{{ consul_bind_address }}"
+consul_advertise_address: "{{ consul_bind_address }}"
+
+consul_group_name: "{{ lookup('env','CONSUL_GROUP_NAME') | default('consul_instances', true) }}"
+consul_servers: "\
+  {% set _consul_servers = [] %}\
+  {% for host in groups[consul_group_name] %}\
+    {% set _consul_node_role = hostvars[host]['consul_node_role'] | default('client', true) %}\
+    {% if ( _consul_node_role == 'server' or _consul_node_role == 'bootstrap') %}\
+      {% if _consul_servers.append(host) %}{% endif %}\
+    {% endif %}\
+  {% endfor %}\
+  {{ _consul_servers }}"
+consul_join: []
+
+consul_datacenter: "{{ lookup('env','CONSUL_DATACENTER') | default('dc1', true) }}"
+consul_node_role: "{{ lookup('env','CONSUL_NODE_ROLE') | default('client', true) }}"
+
+consul_group: "consul"
+consul_user: "consul"
+
+consul_systemd_unit_path: "/etc/systemd/system"
+
+consul_config_path: "/etc/consul.d"
+consul_data_path: "/opt/consul"
+
+consul_client_address: "0.0.0.0"
+
+syslog_user: "{{ lookup('env','SYSLOG_USER') | default('root', true) }}"
+syslog_group: "{{ lookup('env','SYSLOG_GROUP') | default('adm', true) }}"
+consul_log_path: "{{ lookup('env','CONSUL_LOG_PATH') | default('/var/log/consul', true) }}"
+consul_log_file: "{{ lookup('env','CONSUL_LOG_FILE') | default('consul.log', true) }}"
+consul_log_level: "{{ lookup('env','CONSUL_LOG_LEVEL') | default('INFO', true) }}"

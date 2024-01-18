@@ -1,0 +1,4 @@
+CONSUL_RAW_KEY="op://Infrastructure/Consul Gossip Key/password"
+NOMAD_GOSSIP_KEY="op://Infrastructure/Nomad Gossip Key/password"
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+ANSIBLE_HOST_KEY_CHECKING=false

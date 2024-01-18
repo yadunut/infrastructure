@@ -1,0 +1,108 @@
+# [[file:../../../../Readme.org::*Nomad][Nomad:4]]
+---
+- name: Expose bind_address, advertise_address and node_role as facts
+  set_fact:
+    nomad_bind_address: "{{ nomad_bind_address }}"
+    nomad_advertise_address: "{{ nomad_advertise_address }}"
+    nomad_node_role: "{{ nomad_node_role }}"
+    nomad_datacenter: "{{ nomad_datacenter }}"
+
+- name: Add Nomad group
+  group:
+    name: "{{ nomad_group }}"
+    state: present
+
+# Add user
+- name: Add Nomad user
+  user:
+    name: "{{ nomad_user }}"
+    comment: "Nomad user"
+    group: "{{ nomad_group }}"
+    system: true
+
+- name: Add Nomad user to docker group
+  user:
+    name: "{{ nomad_user }}"
+    groups: docker
+    append: true
+  when:
+    - _nomad_node_client | bool
+
+- name: Install Nomad
+  apt:
+    pkg:
+      - nomad
+    state: latest
+
+- name: Create directories
+  file:
+    dest: "{{ item }}"
+    state: directory
+    owner: "{{ nomad_user }}"
+    group: "{{ nomad_group }}"
+    mode: "0755"
+  with_items:
+    - "{{ nomad_data_path }}"
+
+- name: Create config directory
+  file:
+    dest: "{{ nomad_config_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+
+- name: Common Configuration
+  template:
+    src: nomad.hcl.j2
+    dest: "{{ nomad_config_path }}/nomad.hcl"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Server configuration
+  template:
+    src: server.hcl.j2
+    dest: "{{ nomad_config_path }}/server.hcl"
+    owner: root
+    group: root
+    mode: 0644
+  when:
+    - _nomad_node_server | bool
+
+- name: Client configuration
+  template:
+    src: client.hcl.j2
+    dest: "{{ nomad_config_path }}/client.hcl"
+    owner: root
+    group: root
+    mode: 0644
+  when:
+    - _nomad_node_client | bool
+
+- block:
+    - name: systemd script
+      template:
+        src: "nomad_systemd.service.j2"
+        dest: "{{ nomad_systemd_unit_path }}/nomad.service"
+        owner: root
+        group: root
+        mode: 0644
+      register: nomad_systemd_file
+    - block:
+      - name: reload systemd daemon
+        systemd:
+          daemon_reload: true
+      - name: Enable nomad at startup (systemd)
+        systemd:
+          name: nomad
+          enabled: yes
+      when: nomad_systemd_file.changed
+  when: ansible_service_mgr == "systemd"
+
+- name: Start Nomad
+  service:
+    name: nomad
+    enabled: true
+    state: restarted
+# Nomad:4 ends here

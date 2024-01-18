@@ -1,0 +1,63 @@
+---
+- name: Set facts
+  set_fact:
+    consul_advertise_address_wan: "{{ consul_advertise_address_wan }}"
+    consul_advertise_address: "{{ consul_advertise_address }}"
+    consul_bind_address: "{{ consul_bind_address }}"
+    consul_datacenter: "{{ consul_datacenter }}"
+    consul_node_role: "{{ consul_node_role }}"
+
+- name: Add Consul group
+  group:
+    name: "{{ consul_group }}"
+    state: present
+
+# Add user
+- name: Add Consul user
+  user:
+    name: "{{ consul_user }}"
+    comment: "Consul user"
+    group: "{{ consul_group }}"
+    system: true
+
+- name: Install Consul
+  apt:
+    pkg:
+      - consul
+    state: latest
+
+- name: Create directories
+  block:
+    - name: Configuration and data directories
+      file:
+        dest: "{{ dir_item }}"
+        state: directory
+        owner: "{{ consul_user }}"
+        group: "{{ consul_group }}"
+        mode: 0700
+      with_items:
+        - "{{ consul_config_path }}"
+        - "{{ consul_data_path }}"
+      loop_control:
+        loop_var: dir_item
+
+# FROM HERE
+
+- name: Create Configuration
+  template:
+    src: consul.hcl.j2
+    dest: "{{ consul_config_path }}/consul.hcl"
+    owner: "{{ consul_user }}"
+    group: "{{ consul_group }}"
+    mode: 0600
+
+- name: Enable consul at startup (systemd)
+  systemd:
+    name: consul
+    enabled: true
+
+- name: Start Consul
+  service:
+    name: consul
+    state: started
+    enabled: true

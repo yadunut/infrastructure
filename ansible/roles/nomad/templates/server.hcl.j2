@@ -1,0 +1,5 @@
+server {
+  enabled = true
+  encrypt = "{{ nomad_gossip_key }}"
+  bootstrap_expect = 3 # I'm too lazy to figure out how to dynamically derive this number from nomad_node_role == 'server'
+}

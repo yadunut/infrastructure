@@ -1,0 +1,5 @@
+# [[file:../../../../Readme.org::*Nomad][Nomad:3]]
+---
+_nomad_node_client: "{{ (nomad_node_role == 'client') or (nomad_node_role == 'both') }}"
+_nomad_node_server: "{{ (nomad_node_role == 'server') or (nomad_node_role == 'both') }}"
+# Nomad:3 ends here

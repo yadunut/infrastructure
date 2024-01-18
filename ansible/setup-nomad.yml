@@ -1,0 +1,13 @@
+# [[file:../Readme.org::*Nomad][Nomad:1]]
+---
+- hosts: consul_instances
+  remote_user: yadunut
+  become: true
+  roles:
+    - role: roles/nomad
+      nomad_iface: tailscale0
+      nomad_group_name: consul_instances
+      nomad_docker_enable: true
+      nomad_use_consul: true
+      nomad_gossip_key: "{{ lookup('env', 'NOMAD_GOSSIP_KEY') }}"
+# Nomad:1 ends here

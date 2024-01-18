@@ -1,0 +1,4 @@
+# [[file:../../../../Readme.org::*Setup Tailscale on Server][Setup Tailscale on Server:1]]
+- name: Connect to the tailscale network
+  command: "tailscale up --force-reauth --auth-key {{ auth_key }} --login-server http://{{ hs_hostname }}:{{ hs_port }}"
+# Setup Tailscale on Server:1 ends here

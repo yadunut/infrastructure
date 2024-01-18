@@ -1,0 +1,44 @@
+# [[file:../../../../Readme.org::*Setup server with ansible][Setup server with ansible:6]]
+---
+- name: Setup hashicorp repositories
+  block:
+    - apt_key:
+        url: https://apt.releases.hashicorp.com/gpg
+        state: present
+    - apt_repository:
+        repo: deb https://apt.releases.hashicorp.com jammy main
+        state: present
+
+- name: Setup tailscale repositories
+  block:
+    - apt_key:
+        url: https://pkgs.tailscale.com/stable/ubuntu/jammy.noarmor.gpg
+        state: present
+    - apt_repository:
+        repo: deb https://pkgs.tailscale.com/stable/ubuntu jammy main
+        state: present
+
+- name: Update System
+  apt:
+    update_cache: true
+    upgrade: dist
+
+- name: Install ufw and tailscale
+  apt:
+    pkg:
+      - ufw
+      - tailscale
+    state: latest
+
+- name: Enable and setup ufw
+  block:
+    - ufw:
+        logging: on
+    - ufw:
+        rule: allow
+        port: ssh
+        proto: tcp
+    - ufw:
+        default: deny
+        state: enabled
+# Setup server with ansible:6 ends here

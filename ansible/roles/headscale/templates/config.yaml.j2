@@ -1,0 +1,76 @@
+# [[file:../../../../Readme.org::*Setup headscale on Server][Setup headscale on Server:2]]
+server_url: http://{{ headscale_hostname }}:{{ headscale_port }}
+
+listen_addr: 0.0.0.0:{{ headscale_port }}
+metrics_listen_addr: 127.0.0.1:9090
+
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+
+private_key_path: /var/lib/headscale/private.key
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+ip_prefixes:
+  - fd7a:115c:a1e0::/48
+  - 100.64.0.0/10
+derp:
+  server:
+    enabled: false
+
+    region_id: 999
+
+    region_code: "headscale"
+    region_name: "Headscale Embedded DERP"
+
+    stun_listen_addr: "0.0.0.0:3478"
+
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+
+  paths: []
+
+  auto_update_enabled: true
+
+  update_frequency: 24h
+
+disable_check_updates: false
+
+ephemeral_node_inactivity_timeout: 30m
+
+node_update_check_interval: 10s
+
+db_type: sqlite3
+
+db_path: /var/lib/headscale/db.sqlite
+
+## Use already defined certificates:
+tls_cert_path: ""
+tls_key_path: ""
+
+log:
+  # Output formatting for logs: text or json
+  format: text
+  level: info
+
+acl_policy_path: ""
+
+dns_config:
+  override_local_dns: true
+
+  nameservers:
+    - 1.1.1.1
+
+  domains: []
+
+  magic_dns: true
+
+  base_domain: {{ headscale_hostname }}
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+logtail:
+  enabled: false
+
+randomize_client_port: false
+# Setup headscale on Server:2 ends here

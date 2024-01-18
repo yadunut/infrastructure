@@ -1,0 +1,12 @@
+# [[file:../Readme.org::*Setup server with ansible][Setup server with ansible:1]]
+---
+collections:
+  - name: cloud.terraform
+
+roles:
+  - name: geerlingguy.docker
+  - src: https://github.com/ansible-community/ansible-consul.git
+    name: ansible-consul
+    scm: git
+    version: master
+# Setup server with ansible:1 ends here

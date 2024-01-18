@@ -1,0 +1,17 @@
+client {
+  enabled = true
+  network_interface = "tailscale0"
+{% if nomad_node_role == 'both' %}
+  host_network "public" {
+    cidr = "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}/24"
+  }
+{% endif %}
+}
+
+plugin "docker" {
+  config {
+    volumes {
+      enabled = true
+    }
+  }
+}

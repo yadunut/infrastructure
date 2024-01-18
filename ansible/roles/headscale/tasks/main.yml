@@ -1,0 +1,63 @@
+# [[file:../../../../Readme.org::*Setup headscale on Server][Setup headscale on Server:1]]
+---
+- name: Get the url to download to
+  become: no
+  local_action:
+    ansible.builtin.shell curl "https://api.github.com/repos/juanfont/headscale/releases/latest" | jq -r '.assets[] | select(.name | endswith("amd64.deb")) | .browser_download_url'
+  register: headscale_deb_url
+
+- name: Install headscale
+  apt:
+    deb: "{{ headscale_deb_url.stdout }}"
+
+- name: Check if headscale_hostname set
+  fail:
+    msg: Set headscale_hostname
+  when: headscale_hostname is not defined
+
+- name: Check if headscale_port set
+  fail:
+    msg: Set headscale_port
+  when: headscale_port is not defined
+
+- name: Copy the configuration file over
+  template:
+    src: config.yaml.j2
+    dest: /etc/headscale/config.yaml
+    mode: u=rw,g=r,o=r
+
+- name: Enable the headscale service
+  systemd:
+    enabled: true
+    state: started
+    name: headscale
+
+- name: Enable Port for headscale
+  ufw:
+    rule: allow
+    port: "{{ headscale_port }}"
+    proto: tcp
+
+- name: Check if API key exists locally
+  become: no
+  local_action:
+    module: stat
+    path: "{{ headscale_env_path }}"
+  register: headscale_env_stat
+- name: Get API Key
+  command: "headscale api create -e 1y -o yaml"
+  register: headscale_apikey
+  when: headscale_env_stat.stat.exists == false
+
+- name: debug apikey
+  debug:
+    msg: "hs_apikey: {{ headscale_apikey }}"
+
+- name: write api key locally
+  become: no
+  local_action:
+    module: copy
+    content: "{{ headscale_apikey.stdout }}"
+    dest: "{{ headscale_env_path }}"
+  when: headscale_env_stat.stat.exists == false
+# Setup headscale on Server:1 ends here

@@ -1,0 +1,3 @@
+install_users: ['p', 's', 'i']
+headscale_env_path: "{{ playbook_dir }}/../headscale.env"
+headscale_port: 443

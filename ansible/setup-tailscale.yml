@@ -1,0 +1,9 @@
+# [[file:../Readme.org::*Setup Headscale users][Setup Headscale users:4]]
+---
+- hosts: all
+  remote_user: "{{ created_username }}"
+  become: true
+  roles:
+    - role: roles/tailscale
+      ts_user: i
+# Setup Headscale users:4 ends here

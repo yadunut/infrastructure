@@ -1,0 +1,43 @@
+# [[file:../../../../Readme.org::*Setup server with ansible][Setup server with ansible:5]]
+---
+- name: Setup passwordless sudo
+  lineinfile:
+    path: /etc/sudoers
+    state: present
+    regexp: '^%sudo'
+    line: '%sudo ALL=(ALL) NOPASSWD: ALL'
+    validate: '/usr/sbin/visudo -cf %s'
+- name: Create user with sudo privilege
+  user:
+    name: "{{ created_username }}"
+    state: present
+    groups: sudo
+    shell: /bin/bash
+    append: true
+
+- name: Set authorized key for remote user
+  become: true
+  authorized_key:
+    user: "{{ created_username }}"
+    manage_dir: true
+    state: present
+    key: "{{ ssh_key }}"
+
+- name: Setup passwordless sudo
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    state: present
+    regexp: '^PermitRootLogin'
+    line: 'PermitRootLogin no'
+    validate: 'sshd -t -f %s'
+
+- name: Update apt and install packages
+  retries: 3
+  delay: 3
+  apt:
+    pkg:
+      - curl
+      - vim
+      - git
+    state: latest
+# Setup server with ansible:5 ends here

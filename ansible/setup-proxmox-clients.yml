@@ -1,0 +1,12 @@
+# [[file:../Readme.org::*Setup Proxmox Nomad Clients][Setup Proxmox Nomad Clients:2]]
+---
+- hosts: all
+  remote_user: "{{ created_username }}"
+  become: true
+  roles:
+    - role: roles/common
+    - role: roles/tailscale
+    - role: geerlingguy.docker
+      docker_users:
+        - "{{ created_username }}"
+# Setup Proxmox Nomad Clients:2 ends here

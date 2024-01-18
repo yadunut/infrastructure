@@ -1,0 +1,9 @@
+# [[file:../Readme.org::*Proxmox Nomad Servers][Proxmox Nomad Servers:2]]
+---
+- hosts: all
+  remote_user: "{{ created_username }}"
+  become: true
+  roles:
+    - role: roles/common
+    - role: roles/tailscale
+# Proxmox Nomad Servers:2 ends here

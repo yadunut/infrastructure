@@ -1,0 +1,31 @@
+[Unit]
+Description=Nomad
+Documentation=https://nomadproject.io/docs/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+{% if _nomad_node_client %}
+User=root
+Group=root
+{% else %}
+User={{ nomad_user }}
+Group={{ nomad_group }}
+{% endif %}
+
+
+ExecStart=/usr/bin/nomad agent -config {{ nomad_config_path }}
+EnvironmentFile=-/etc/nomad.d/nomad.env
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+KillSignal=SIGINT
+LimitNOFILE=65536
+LimitNPROC=infinity
+Restart=on-failure
+RestartSec=2
+
+TasksMax=infinity
+OOMScoreAdjust=-1000
+
+[Install]
+WantedBy=multi-user.target
