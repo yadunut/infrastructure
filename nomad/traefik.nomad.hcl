@@ -30,7 +30,13 @@ job "traefik" {
         "traefik.http.routers.dashboard.rule=(PathPrefix(`/api`) || PathPrefix(`/dashboard`))",
         "traefik.http.routers.dashboard.middlewares=tailscale",
         "traefik.http.middlewares.tailscale.ipwhitelist.sourcerange=172.17.0.0/16",
-        "traefik.http.routers.dashboard.service=api@internal"
+        "traefik.http.routers.dashboard.service=api@internal",
+
+        "traefik.http.routers.temp-router.rule=Host(`tempRouter.ts.yadunut.com`)",
+        "traefik.http.routers.temp-router.tls=true",
+        "traefik.http.routers.temp-router.tls.domains[0].main=ts.yadunut.com",
+        "traefik.http.routers.temp-router.tls.domains[0].sans=*.ts.yadunut.com",
+        "traefik.http.routers.temp-router.tls.certresolver=myresolver",
       ]
     }
     task "traefik" {
@@ -47,19 +53,22 @@ job "traefik" {
           "--providers.consulcatalog.prefix=traefik",
           "--providers.consulcatalog.exposedByDefault=false",
 
-          # "--certificatesresolvers.myresolver.acme.email=cert@yadunut.com",
-          # "--certificatesresolvers.myresolver.acme.storage=acme.json",
-          # "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web",
-          #
-          # "--certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare",
+          "--certificatesresolvers.myresolver.acme.email=cert@yadunut.com",
+          "--certificatesresolvers.myresolver.acme.storage=acme.json",
+          "--certificatesresolvers.myresolver.acme.dnschallenge.provider=cloudflare",
           #
           "--api.dashboard=true",
           "--log.level=DEBUG",
         ]
       }
-      # env {
-      #   CF_DNS_API_TOKEN = ""
-      # }
+      template {
+        data = <<EOH
+        CLOUDFLARE_EMAIL={{ with nomadVar "nomad/jobs/traefik" }}{{ .CLOUDFLARE_EMAIL }}{{ end }}
+        CLOUDFLARE_API_KEY={{ with nomadVar "nomad/jobs/traefik" }}{{ .CLOUDFLARE_API_KEY }}{{ end }}
+        EOH
+        env = true
+        destination = "local/env.env"
+      }
     }
   }
 }
