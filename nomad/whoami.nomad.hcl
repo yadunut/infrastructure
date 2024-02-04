@@ -4,7 +4,9 @@ job "whoami" {
     count = 1
 
     network {
-      port "http" {}
+      port "http" {
+        to = "8080"
+      }
     }
 
     service {
@@ -19,12 +21,8 @@ job "whoami" {
     task "whoami" {
       driver = "docker"
       config {
-        image = "traefik/whoami"
+        image = "yadunut/whoami:v0.1"
         ports = ["http"]
-      }
-
-      env {
-        WHOAMI_PORT_NUMBER = "${NOMAD_PORT_http}"
       }
     }
   }

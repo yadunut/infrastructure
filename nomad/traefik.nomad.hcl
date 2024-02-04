@@ -32,11 +32,16 @@ job "traefik" {
         "traefik.http.middlewares.tailscale.ipwhitelist.sourcerange=172.17.0.0/16",
         "traefik.http.routers.dashboard.service=api@internal",
 
+        "traefik.http.middlewares.https-redirect.redirectscheme.scheme=https",
+        "traefik.http.middlewares.https-redirect.redirectscheme.permanent=true",
+
         "traefik.http.routers.temp-router.rule=Host(`tempRouter.ts.yadunut.com`)",
         "traefik.http.routers.temp-router.tls=true",
         "traefik.http.routers.temp-router.tls.domains[0].main=ts.yadunut.com",
         "traefik.http.routers.temp-router.tls.domains[0].sans=*.ts.yadunut.com",
         "traefik.http.routers.temp-router.tls.certresolver=myresolver",
+
+
       ]
     }
     task "traefik" {

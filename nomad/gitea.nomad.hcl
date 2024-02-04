@@ -22,9 +22,16 @@ job "gitea" {
       port = "http"
       tags = [
         "traefik.enable=true",
-        "traefik.http.routers.gitea.rule=Host(`gitea.ts.yadunut.com`)",
-        "traefik.http.routers.gitea.tls=true",
-        "traefik.http.routers.gitea.tls.certresolver=myresolver",
+
+        "traefik.http.routers.gitea-http.entrypoints=http",
+        "traefik.http.routers.gitea-http.rule=Host(`gitea.ts.yadunut.com`)",
+        "traefik.http.routers.gitea-http.middlewares=https-redirect",
+
+        "traefik.http.routers.gitea-https.entrypoints=https",
+        "traefik.http.routers.gitea-https.rule=Host(`gitea.ts.yadunut.com`)",
+        "traefik.http.routers.gitea-https.tls=true",
+        "traefik.http.routers.gitea-https.tls.certresolver=myresolver",
+
       ]
     }
 
